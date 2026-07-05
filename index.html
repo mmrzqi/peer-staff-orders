@@ -40,9 +40,12 @@
 <script>
 (function(){
 'use strict';
-var DB_MODE='local'; // local | firebase | supabase. Keep local until real credentials are added.
+var DB_MODE='supabase'; // local | firebase | supabase. Keep local until real credentials are added.
 var FIREBASE_CONFIG={apiKey:'',authDomain:'',projectId:'',storageBucket:'',messagingSenderId:'',appId:''};
-var SUPABASE_CONFIG={url:'',anonKey:''};
+var SUPABASE_CONFIG = {
+  url: "https://your-project-id.supabase.co",
+  anonKey: "your-anon-public-key"
+};
 var KEY='peer_ops_v2';
 var CATEGORIES=[['cakes','🍰','Cakes'],['cookies','🍪','Cookies'],['drinks','🥤','Cups & Drinks'],['ingredients','🥛','Ingredients'],['coffee','☕','Coffee Beans'],['other','📦','Other']];
 var state={session:null,active:'dashboard',filter:'pending',query:'',draftOpen:false,data:{orders:[],inventory:[],staff:[]}};
