@@ -131,6 +131,42 @@ async function load(){
   }
 }
 
+async function refreshData(showToast){
+  var before={};
+  (state.data.orders||[]).forEach(function(o){before[o.id]=true});
+
+  var result = await supabaseClient
+    .from("peer_data")
+    .select("data")
+    .eq("id","main")
+    .single();
+
+  if(result.error){
+    if(showToast) toast("Refresh error: " + result.error.message);
+    return;
+  }
+
+  if(result.data && result.data.data){
+    var newData=result.data.data;
+    if(!newData.allowedStaff) newData.allowedStaff=[];
+    if(!newData.branches) newData.branches=[{id:'main',name:'Main'}];
+    if(!newData.inventory) newData.inventory=[];
+    if(!newData.orders) newData.orders=[];
+
+    newData.orders.forEach(function(o){
+      var forThisUser=canManage() || (state.session&&o.branchId===state.session.branchId);
+      if(forThisUser && !before[o.id]) notifyOrder(o);
+    });
+
+    state.data=newData;
+    rememberOrders();
+    if(state.session) renderViews();
+    if(showToast) toast("Orders refreshed");
+  }
+}
+
+
+
 function seed(){
   state.data={
     orders:[],
@@ -197,6 +233,20 @@ function notifyOrder(o){
     try{new Notification('New Peer order', {body:'Order No. '+String(o.number).padStart(3,'0')+' · '+branchName(o.branchId)});}catch(e){}
   }
 }
+async function sendPushForOrder(o){
+  try{
+    await supabaseClient.functions.invoke('send-order-notification', {
+      body: {
+        branchId: o.branchId || 'main',
+        branchName: branchName(o.branchId),
+        orderNo: 'No. ' + String(o.number).padStart(3,'0')
+      }
+    });
+  }catch(e){
+    console.log('Push function error', e);
+  }
+}
+
 var knownOrderIds={};
 function rememberOrders(){
   knownOrderIds={};
@@ -237,14 +287,14 @@ function renderTabs(){
 function showView(id){['dashboard','orders','inventory','staff','analytics','settings'].forEach(function(v){$(v+'View').classList.toggle('hidden',v!==id)})}
 function renderViews(){showView(state.active);renderDashboard();renderOrders();renderInventory();renderStaff();renderAnalytics();renderSettings()}
 function statCards(){var c=counts();return '<div class="stats-grid"><div class="stat-card"><div class="stat-label">Pending orders</div><div class="stat-value">'+c.pending+'</div></div><div class="stat-card"><div class="stat-label">Low stock</div><div class="stat-value">'+c.low+'</div></div><div class="stat-card"><div class="stat-label">Urgent items</div><div class="stat-value">'+c.urgent+'</div></div><div class="stat-card"><div class="stat-label">Active staff</div><div class="stat-value">'+c.staff+'</div></div></div>'}
-function renderDashboard(){var low=visibleInventory().filter(function(i){return Number(i.stock)<=Number(i.min)});$('dashboardView').innerHTML=statCards()+'<div class="grid-2"><section class="panel"><div class="panel-head"><h2>Today / Tomorrow</h2><button class="btn btn-primary desktop-new" id="dashNew">+ New order</button></div><div class="board">'+filteredOrders('pending').slice(0,4).map(ticket).join('')+(filteredOrders('pending').length?'':'<p>No pending orders.</p>')+'</div></section>'+(canViewInventory()?'<section class="panel"><h2>Stock alerts</h2>'+low.map(function(i){return '<div class="line"><span class="name"><b>'+esc(i.name)+'</b><br><small>'+categoryLabel(i.category)+' · '+branchName(i.branchId)+'</small></span><span class="status danger">'+i.stock+' '+esc(i.unit)+' left</span></div>'}).join('')+(low.length?'':'<p>All inventory is above minimum level.</p>')+'</section>':'')+'</div>'}
+function renderDashboard(){var low=visibleInventory().filter(function(i){return Number(i.stock)<=Number(i.min)});$('dashboardView').innerHTML=statCards()+'<div class="grid-2"><section class="panel"><div class="panel-head"><h2>Today / Tomorrow</h2><div><button class="btn btn-outline desktop-new" id="refreshOrders">↻ Refresh</button> <button class="btn btn-primary desktop-new" id="dashNew">+ New order</button></div></div><div class="board">'+filteredOrders('pending').slice(0,4).map(ticket).join('')+(filteredOrders('pending').length?'':'<p>No pending orders.</p>')+'</div></section>'+(canViewInventory()?'<section class="panel"><h2>Stock alerts</h2>'+low.map(function(i){return '<div class="line"><span class="name"><b>'+esc(i.name)+'</b><br><small>'+categoryLabel(i.category)+' · '+branchName(i.branchId)+'</small></span><span class="status danger">'+i.stock+' '+esc(i.unit)+' left</span></div>'}).join('')+(low.length?'':'<p>All inventory is above minimum level.</p>')+'</section>':'')+'</div>'}
 function orderForm(){var disabled=!state.draftOpen?' hidden':'';return '<section class="panel'+disabled+'" id="orderForm"><div class="panel-head"><h2>New order</h2><button class="btn btn-ghost btn-sm" id="closeForm">Close</button></div><div class="grid-3"><div class="field"><label>Needed date</label><input type="date" id="orderDate" value="'+tomorrowISO()+'"></div><div class="field"><label>Ordered by</label><input id="orderedBy" value="'+esc(state.session.name)+'"></div><div class="field"><label>Note</label><input id="orderNote" placeholder="Optional"></div></div><div id="itemRows"></div><button class="btn btn-outline" id="addItem">+ Add item</button> <button class="btn btn-primary" id="saveOrder">Confirm order</button></section>'}
-function renderOrders(){$('ordersView').innerHTML='<div class="toolbar"><div><button class="btn btn-primary" id="newOrder">+ New order</button></div>'+(canManage()?'<select id="branchFilter"><option value="all">All branches</option>'+((state.data.branches||[]).map(function(b){return '<option value="'+b.id+'">'+esc(b.name)+'</option>'}).join(''))+'</select>':'')+'<input id="searchOrders" placeholder="Search orders or items" value="'+esc(state.query)+'"></div>'+orderForm()+'<section class="panel"><div class="panel-head"><h2>Order board</h2><select id="filterOrders"><option value="pending">Pending</option><option value="completed">Completed</option><option value="cancelled">Cancelled</option><option value="all">All</option></select></div><div class="board">'+filteredOrders(state.filter).map(ticket).join('')+(filteredOrders(state.filter).length?'':'<p>No orders found.</p>')+'</div></section>';var f=$('filterOrders');if(f)f.value=state.filter;var bf=$('branchFilter');if(bf)bf.value=state.branchFilter;if(state.draftOpen)renderDraftRows()}
+function renderOrders(){$('ordersView').innerHTML='<div class="toolbar"><div><button class="btn btn-primary" id="newOrder">+ New order</button> <button class="btn btn-outline" id="refreshOrders">↻ Refresh</button></div>'+(canManage()?'<select id="branchFilter"><option value="all">All branches</option>'+((state.data.branches||[]).map(function(b){return '<option value="'+b.id+'">'+esc(b.name)+'</option>'}).join(''))+'</select>':'')+'<input id="searchOrders" placeholder="Search orders or items" value="'+esc(state.query)+'"></div>'+orderForm()+'<section class="panel"><div class="panel-head"><h2>Order board</h2><select id="filterOrders"><option value="pending">Pending</option><option value="completed">Completed</option><option value="cancelled">Cancelled</option><option value="all">All</option></select></div><div class="board">'+filteredOrders(state.filter).map(ticket).join('')+(filteredOrders(state.filter).length?'':'<p>No orders found.</p>')+'</div></section>';var f=$('filterOrders');if(f)f.value=state.filter;var bf=$('branchFilter');if(bf)bf.value=state.branchFilter;if(state.draftOpen)renderDraftRows()}
 function filteredOrders(filter){var q=state.query.toLowerCase();return visibleOrders().filter(function(o){if(filter!=='all'&&o.status!==filter)return false;if(canManage()&&state.branchFilter!=='all'&&o.branchId!==state.branchFilter)return false;if(!q)return true;return (o.orderedBy+' '+o.note+' '+o.items.map(function(i){return i.name}).join(' ')).toLowerCase().indexOf(q)>-1}).sort(function(a,b){return new Date(b.createdAt)-new Date(a.createdAt)})}
 function ticket(o){var total=o.items.length,done=o.items.filter(function(i){return i.received}).length,pct=total?Math.round(done/total*100):0;var groups=CATEGORIES.map(function(c){var its=o.items.filter(function(i){return i.category===c[0]});if(!its.length)return'';return '<div class="group"><div class="group-title">'+c[1]+' '+c[2]+'</div>'+its.map(function(i){return '<label class="line"><input type="checkbox" data-check="'+o.id+'|'+i.id+'" '+(i.received?'checked':'')+' '+(o.status==='cancelled'?'disabled':'')+'><span class="name '+(i.received?'done':'')+'">'+esc(i.name)+'</span><span class="qty">'+esc(i.qty)+'</span>'+(i.stock?'<span class="badge low">'+esc(i.stock)+'</span>':'')+(i.urgent?'<span class="badge urgent">Urgent</span>':'')+'</label>'}).join('')+'</div>'}).join('');return '<article class="ticket '+o.status+'"><div class="ticket-head"><span class="ticket-no">No. '+String(o.number).padStart(3,'0')+'</span><span class="ticket-date">'+fmt(o.date)+'</span></div><div class="ticket-meta">By <b>'+esc(o.orderedBy)+'</b> · '+done+'/'+total+' received'+(o.note?' · '+esc(o.note):'')+'</div><div class="progress"><div class="bar" style="width:'+pct+'%"></div></div>'+groups+'<div class="ticket-footer">'+(o.status==='pending'?'<button class="btn btn-outline btn-sm" data-cancel="'+o.id+'">Cancel</button>':'')+(o.status==='cancelled'?'<button class="btn btn-outline btn-sm" data-restore="'+o.id+'">Restore</button><button class="btn btn-danger btn-sm" data-delete="'+o.id+'">Delete</button>':'')+'</div></article>'}
 function newDraft(){state.draftOpen=true;draft=[{id:uid(),category:'cakes',name:'',qty:'',stock:'',urgent:false}];state.active='orders';renderViews()}
 function renderDraftRows(){var rows=draft.map(function(i){return '<div class="item-entry" data-row="'+i.id+'"><div class="field"><label>Category</label><select data-f="category">'+CATEGORIES.map(function(c){return '<option value="'+c[0]+'" '+(i.category===c[0]?'selected':'')+'>'+c[1]+' '+c[2]+'</option>'}).join('')+'</select></div><div class="field"><label>Item</label><input data-f="name" value="'+esc(i.name)+'" placeholder="Tiramisu"></div><div class="field"><label>Qty</label><input data-f="qty" value="'+esc(i.qty)+'" placeholder="4 pcs"></div><div class="field"><label>Stock now</label><input data-f="stock" value="'+esc(i.stock)+'" placeholder="1 left"></div><div class="field"><label>Urgent</label><select data-f="urgent"><option value="false">No</option><option value="true" '+(i.urgent?'selected':'')+'>Yes</option></select></div><button class="btn btn-ghost" data-remove-row="'+i.id+'">×</button></div>'}).join('');$('itemRows').innerHTML=rows}
-async function saveOrder(){var orderedBy=$('orderedBy').value.trim();var items=draft.filter(function(i){return i.name.trim()}).map(function(i){return{id:i.id,category:i.category,name:i.name.trim(),qty:i.qty.trim()||'1',stock:i.stock.trim(),urgent:!!i.urgent,received:false}});if(!orderedBy||!items.length){toast('Add staff name and at least one item');return}var newOrder={id:uid(),number:nextNo(),branchId:state.session.branchId||getMainBranchId(),date:$('orderDate').value||tomorrowISO(),orderedBy:orderedBy,note:$('orderNote').value.trim(),status:'pending',createdAt:new Date().toISOString(),createdBy:state.session.name,items:items};state.data.orders.unshift(newOrder);state.draftOpen=false;draft=[];await save();notifyOrder(newOrder);toast('Order added');renderViews()}
+async function saveOrder(){var orderedBy=$('orderedBy').value.trim();var items=draft.filter(function(i){return i.name.trim()}).map(function(i){return{id:i.id,category:i.category,name:i.name.trim(),qty:i.qty.trim()||'1',stock:i.stock.trim(),urgent:!!i.urgent,received:false}});if(!orderedBy||!items.length){toast('Add staff name and at least one item');return}var newOrder={id:uid(),number:nextNo(),branchId:state.session.branchId||getMainBranchId(),date:$('orderDate').value||tomorrowISO(),orderedBy:orderedBy,note:$('orderNote').value.trim(),status:'pending',createdAt:new Date().toISOString(),createdBy:state.session.name,items:items};state.data.orders.unshift(newOrder);state.draftOpen=false;draft=[];await save();notifyOrder(newOrder);await sendPushForOrder(newOrder);toast('Order added and notification sent');renderViews()}
 function renderInventory(){
   if(!canViewInventory()){
     $('inventoryView').innerHTML='<section class="panel"><h2>Inventory</h2><p>Inventory is only available to Kitchen and Manager accounts.</p></section>';
@@ -276,7 +326,7 @@ function renderStaff(){
     '<section class="panel"><div class="panel-head"><h2>Login history / staff accounts</h2>'+(canManage()?'<button class="btn btn-primary" id="addStaff">+ Add staff account</button>':'')+'</div><table class="table"><thead><tr><th>Name</th><th>Role</th><th>Branch</th><th>Status</th><th></th></tr></thead><tbody>'+logins+'</tbody></table></section>'
 }
 function renderAnalytics(){var byCat={};state.data.orders.forEach(function(o){if(o.status!=='cancelled')o.items.forEach(function(i){byCat[i.category]=(byCat[i.category]||0)+1})});var max=Math.max(1,...Object.values(byCat));var bars=CATEGORIES.map(function(c){var v=byCat[c[0]]||0;return '<div class="analytics-row"><b>'+c[1]+' '+c[2]+'</b><div class="analytics-track"><div class="analytics-fill" style="width:'+(v/max*100)+'%"></div></div><span>'+v+'</span></div>'}).join('');var c=counts(),rate=c.items?Math.round(c.done/c.items*100):0;$('analyticsView').innerHTML=statCards()+'<section class="panel"><h2>Analytics</h2><p>Completion rate: <b>'+rate+'%</b>. Total items received: <b>'+c.done+'/'+c.items+'</b>.</p><div class="analytics-bars">'+bars+'</div></section>'}
-function renderSettings(){$('settingsView').innerHTML='<section class="panel"><h2>Notifications</h2><p>For iPhone notifications, open this site in Safari, add it to Home Screen, then tap Enable notifications. This static GitHub version can notify active/home-screen sessions through Supabase realtime. True closed-app push needs a PWA service worker plus a push provider/server such as OneSignal or a Supabase Edge Function.</p></section><section class="panel"><h2>Database connection</h2><p>This version uses <b>Supabase cloud database</b>. If data does not sync, check your Supabase URL, anon key, table name, and RLS policy.</p><div class="codebox">DB_MODE = "supabase";\nSUPABASE_CONFIG = {\n  url: "YOUR_SUPABASE_URL",\n  anonKey: "YOUR_SUPABASE_ANON_KEY"\n};\n\nTable used: peer_data\nRow used: id = main</div></section><section class="panel"><h2>Deployment</h2><p><b>GitHub Pages:</b> upload this file as <b>index.html</b>, then enable Pages from Settings → Pages.</p></section><section class="panel"><h2>Backup</h2><button class="btn btn-outline" id="enableNotifications">Enable notifications</button> <button class="btn btn-outline" id="exportData">Export JSON backup</button> <button class="btn btn-danger" id="resetData">Reset cloud data</button></section>'}
+function renderSettings(){$('settingsView').innerHTML='<section class="panel"><h2>Notifications</h2><p>For iPhone notifications, open this site in Safari, add it to Home Screen, then tap Enable notifications. This static GitHub version can notify active/home-screen sessions through Supabase realtime. True closed-app push needs a PWA service worker plus a push provider/server such as OneSignal or a Supabase Edge Function.</p></section><section class="panel"><h2>Database connection</h2><p>This version uses <b>Supabase cloud database</b>. If data does not sync, check your Supabase URL, anon key, table name, and RLS policy.</p><div class="codebox">DB_MODE = "supabase";\nSUPABASE_CONFIG = {\n  url: "YOUR_SUPABASE_URL",\n  anonKey: "YOUR_SUPABASE_ANON_KEY"\n};\n\nTable used: peer_data\nRow used: id = main</div></section><section class="panel"><h2>Deployment</h2><p><b>GitHub Pages:</b> upload this file as <b>index.html</b>, then enable Pages from Settings → Pages.</p></section><section class="panel"><h2>Backup</h2><button class="btn btn-outline" id="enableNotifications">Enable notifications</button> <button class="btn btn-outline" id="testPushNotification">Test push</button> <button class="btn btn-outline" id="testLocalNotification">Test notification</button> <button class="btn btn-outline" id="exportData">Export JSON backup</button> <button class="btn btn-danger" id="resetData">Reset cloud data</button></section>'}
 function tick(){var el=$('clockPill');if(el)el.textContent=new Date().toLocaleString('en-GB',{weekday:'short',day:'2-digit',month:'short',hour:'2-digit',minute:'2-digit'})}
 
 document.addEventListener('click',async function(e){
@@ -323,6 +373,7 @@ document.addEventListener('click',async function(e){
   }
   if(t.id==='logoutBtn'){localStorage.removeItem(KEY+'_session');state.session=null;appRender()}
   var tab=t.closest('[data-tab]');if(tab){state.active=tab.dataset.tab;appRender()}
+  if(t.id==='refreshOrders')await refreshData(true);
   if(t.id==='newOrder'||t.id==='dashNew'||t.id==='mobileNewBtn')newDraft();
   if(t.id==='closeForm'){state.draftOpen=false;renderViews()}
   if(t.id==='addItem'){draft.push({id:uid(),category:'cakes',name:'',qty:'',stock:'',urgent:false});renderDraftRows()}
@@ -403,6 +454,18 @@ document.addEventListener('click',async function(e){
   if(t.dataset.toggleStaff&&canManage()){var s=state.data.staff.find(function(x){return x.id===t.dataset.toggleStaff});s.active=!s.active;await save();renderViews()}
   if(t.dataset.delStaff&&canManage()){state.data.staff=state.data.staff.filter(function(s){return s.id!==t.dataset.delStaff});await save();renderViews()}
   if(t.id==='enableNotifications'){requestNotify()}
+  if(t.id==='testPushNotification'){
+    await sendPushForOrder({number:999,branchId:state.session&&state.session.branchId?state.session.branchId:getMainBranchId()});
+    toast('Test push sent');
+  }
+  if(t.id==='testLocalNotification'){
+    if('Notification' in window && Notification.permission==='granted'){
+      new Notification('Peer test notification',{body:'Notifications are enabled on this device.'});
+    }else{
+      requestNotify();
+      toast('Allow notifications first, then test again');
+    }
+  }
   if(t.id==='exportData'){var blob=new Blob([JSON.stringify(state.data,null,2)],{type:'application/json'});var a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download='peer-operations-backup.json';a.click()}
   if(t.id==='resetData'&&confirm('Reset cloud data?')){seed();await save();renderViews()}
 });
@@ -415,6 +478,7 @@ load().then(function(){
   setupRealtime();
   tick();
   setInterval(tick,30000);
+  setInterval(function(){ if(state.session) refreshData(false); }, 8000);
   appRender();
 });
 })();
