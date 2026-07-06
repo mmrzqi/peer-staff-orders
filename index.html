@@ -228,6 +228,19 @@ function requestNotify(){
   if(!('Notification' in window)){toast('Notifications not supported on this browser');return}
   Notification.requestPermission().then(function(p){toast(p==='granted'?'Notifications enabled':'Notifications not enabled')});
 }
+
+function tagOneSignalUser(name,role,branchId){
+  if(!window.OneSignalDeferred)return;
+  OneSignalDeferred.push(async function(OneSignal){
+    try{
+      await OneSignal.login(String(name||'').toLowerCase());
+      OneSignal.User.addTag("role", role);
+      OneSignal.User.addTag("branchId", branchId);
+      OneSignal.User.addTag("branch", branchName(branchId));
+    }catch(e){console.log('OneSignal tag error',e)}
+  });
+}
+
 function notifyOrder(o){
   if('Notification' in window && Notification.permission==='granted'){
     try{new Notification('New Peer order', {body:'Order No. '+String(o.number).padStart(3,'0')+' · '+branchName(o.branchId)});}catch(e){}
@@ -326,7 +339,7 @@ function renderStaff(){
     '<section class="panel"><div class="panel-head"><h2>Login history / staff accounts</h2>'+(canManage()?'<button class="btn btn-primary" id="addStaff">+ Add staff account</button>':'')+'</div><table class="table"><thead><tr><th>Name</th><th>Role</th><th>Branch</th><th>Status</th><th></th></tr></thead><tbody>'+logins+'</tbody></table></section>'
 }
 function renderAnalytics(){var byCat={};state.data.orders.forEach(function(o){if(o.status!=='cancelled')o.items.forEach(function(i){byCat[i.category]=(byCat[i.category]||0)+1})});var max=Math.max(1,...Object.values(byCat));var bars=CATEGORIES.map(function(c){var v=byCat[c[0]]||0;return '<div class="analytics-row"><b>'+c[1]+' '+c[2]+'</b><div class="analytics-track"><div class="analytics-fill" style="width:'+(v/max*100)+'%"></div></div><span>'+v+'</span></div>'}).join('');var c=counts(),rate=c.items?Math.round(c.done/c.items*100):0;$('analyticsView').innerHTML=statCards()+'<section class="panel"><h2>Analytics</h2><p>Completion rate: <b>'+rate+'%</b>. Total items received: <b>'+c.done+'/'+c.items+'</b>.</p><div class="analytics-bars">'+bars+'</div></section>'}
-function renderSettings(){$('settingsView').innerHTML='<section class="panel"><h2>Notifications</h2><p>For iPhone notifications, open this site in Safari, add it to Home Screen, then tap Enable notifications. This static GitHub version can notify active/home-screen sessions through Supabase realtime. True closed-app push needs a PWA service worker plus a push provider/server such as OneSignal or a Supabase Edge Function.</p></section><section class="panel"><h2>Database connection</h2><p>This version uses <b>Supabase cloud database</b>. If data does not sync, check your Supabase URL, anon key, table name, and RLS policy.</p><div class="codebox">DB_MODE = "supabase";\nSUPABASE_CONFIG = {\n  url: "YOUR_SUPABASE_URL",\n  anonKey: "YOUR_SUPABASE_ANON_KEY"\n};\n\nTable used: peer_data\nRow used: id = main</div></section><section class="panel"><h2>Deployment</h2><p><b>GitHub Pages:</b> upload this file as <b>index.html</b>, then enable Pages from Settings → Pages.</p></section><section class="panel"><h2>Backup</h2><button class="btn btn-outline" id="enableNotifications">Enable notifications</button> <button class="btn btn-outline" id="testPushNotification">Test push</button> <button class="btn btn-outline" id="testLocalNotification">Test notification</button> <button class="btn btn-outline" id="exportData">Export JSON backup</button> <button class="btn btn-danger" id="resetData">Reset cloud data</button></section>'}
+function renderSettings(){$('settingsView').innerHTML='<section class="panel"><h2>Notifications</h2><p><b>Notification troubleshooting:</b> If you do not receive notifications, first open from iPhone Home Screen, login, tap Enable notifications, then tap Test push. Also check OneSignal → Audience → Subscriptions. For iPhone notifications, open this site in Safari, add it to Home Screen, then tap Enable notifications. This static GitHub version can notify active/home-screen sessions through Supabase realtime. True closed-app push needs a PWA service worker plus a push provider/server such as OneSignal or a Supabase Edge Function.</p></section><section class="panel"><h2>Database connection</h2><p>This version uses <b>Supabase cloud database</b>. If data does not sync, check your Supabase URL, anon key, table name, and RLS policy.</p><div class="codebox">DB_MODE = "supabase";\nSUPABASE_CONFIG = {\n  url: "YOUR_SUPABASE_URL",\n  anonKey: "YOUR_SUPABASE_ANON_KEY"\n};\n\nTable used: peer_data\nRow used: id = main</div></section><section class="panel"><h2>Deployment</h2><p><b>GitHub Pages:</b> upload this file as <b>index.html</b>, then enable Pages from Settings → Pages.</p></section><section class="panel"><h2>Backup</h2><button class="btn btn-outline" id="enableNotifications">Enable notifications</button> <button class="btn btn-outline" id="testPushNotification">Test push</button> <button class="btn btn-outline" id="testLocalNotification">Test notification</button> <button class="btn btn-outline" id="exportData">Export JSON backup</button> <button class="btn btn-danger" id="resetData">Reset cloud data</button></section>'}
 function tick(){var el=$('clockPill');if(el)el.textContent=new Date().toLocaleString('en-GB',{weekday:'short',day:'2-digit',month:'short',hour:'2-digit',minute:'2-digit'})}
 
 document.addEventListener('click',async function(e){
@@ -350,6 +363,7 @@ document.addEventListener('click',async function(e){
 
     state.session={name:name,role:role,branchId:loginBranchId};
     localStorage.setItem(KEY+'_session',JSON.stringify(state.session));
+    tagOneSignalUser(name,role,loginBranchId);
 
     if(!state.data.staff.some(function(s){return sameName(s.name,name)})){
       state.data.staff.push({id:uid(),name:name,role:state.session.role,active:true,branchId:loginBranchId});
