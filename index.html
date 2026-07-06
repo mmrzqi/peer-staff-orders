@@ -19,6 +19,7 @@
     <p>Daily order lists, staff accounts, inventory alerts, and simple analytics for Peer Speciality Coffee.</p>
     <div class="field"><label>Staff name</label><input id="loginName" placeholder="e.g. Mohammed" autocomplete="name"></div>
     <div class="field"><label>Role</label><select id="loginRole"><option value="manager">Manager</option><option value="staff">Staff</option><option value="kitchen">Kitchen</option></select></div>
+    <div class="field" id="managerPasswordField"><label>Manager password</label><input id="managerPassword" type="password" placeholder="Required for manager"></div>
     <button class="btn btn-primary" id="loginBtn" style="width:100%">Enter app</button>
     <p class="demo-note">Cloud mode uses Supabase, so orders and inventory can sync across devices.</p>
   </section>
@@ -63,7 +64,7 @@ var supabaseClient = supabase.createClient(
 
 var KEY='peer_ops_v2';
 var CATEGORIES=[['cakes','🍰','Cakes'],['cookies','🍪','Cookies'],['drinks','🥤','Cups & Drinks'],['ingredients','🥛','Ingredients'],['coffee','☕','Coffee Beans'],['other','📦','Other']];
-var state={session:null,active:'dashboard',filter:'pending',query:'',draftOpen:false,data:{orders:[],inventory:[],staff:[]}};
+var state={session:null,active:'dashboard',filter:'pending',query:'',draftOpen:false,data:{orders:[],inventory:[],staff:[],allowedStaff:[]}};
 var draft=[];
 
 function $(id){return document.getElementById(id)}
@@ -105,6 +106,7 @@ async function load(){
 
   if(result.data && result.data.data){
     state.data = result.data.data;
+    if(!state.data.allowedStaff) state.data.allowedStaff = [];
   }else{
     seed();
     await save();
@@ -124,6 +126,10 @@ function seed(){
     ],
     staff:[
       {id:uid(),name:'Mohammed',role:'manager',active:true},
+      {id:uid(),name:'Kitchen Team',role:'kitchen',active:true},
+      {id:uid(),name:'Barista',role:'staff',active:true}
+    ],
+    allowedStaff:[
       {id:uid(),name:'Kitchen Team',role:'kitchen',active:true},
       {id:uid(),name:'Barista',role:'staff',active:true}
     ]
@@ -148,7 +154,19 @@ function newDraft(){state.draftOpen=true;draft=[{id:uid(),category:'cakes',name:
 function renderDraftRows(){var rows=draft.map(function(i){return '<div class="item-entry" data-row="'+i.id+'"><div class="field"><label>Category</label><select data-f="category">'+CATEGORIES.map(function(c){return '<option value="'+c[0]+'" '+(i.category===c[0]?'selected':'')+'>'+c[1]+' '+c[2]+'</option>'}).join('')+'</select></div><div class="field"><label>Item</label><input data-f="name" value="'+esc(i.name)+'" placeholder="Tiramisu"></div><div class="field"><label>Qty</label><input data-f="qty" value="'+esc(i.qty)+'" placeholder="4 pcs"></div><div class="field"><label>Stock now</label><input data-f="stock" value="'+esc(i.stock)+'" placeholder="1 left"></div><div class="field"><label>Urgent</label><select data-f="urgent"><option value="false">No</option><option value="true" '+(i.urgent?'selected':'')+'>Yes</option></select></div><button class="btn btn-ghost" data-remove-row="'+i.id+'">×</button></div>'}).join('');$('itemRows').innerHTML=rows}
 async function saveOrder(){var orderedBy=$('orderedBy').value.trim();var items=draft.filter(function(i){return i.name.trim()}).map(function(i){return{id:i.id,category:i.category,name:i.name.trim(),qty:i.qty.trim()||'1',stock:i.stock.trim(),urgent:!!i.urgent,received:false}});if(!orderedBy||!items.length){toast('Add staff name and at least one item');return}state.data.orders.unshift({id:uid(),number:nextNo(),date:$('orderDate').value||tomorrowISO(),orderedBy:orderedBy,note:$('orderNote').value.trim(),status:'pending',createdAt:new Date().toISOString(),createdBy:state.session.name,items:items});state.draftOpen=false;draft=[];await save();toast('Order added');renderViews()}
 function renderInventory(){var rows=state.data.inventory.map(function(i){var low=Number(i.stock)<=Number(i.min);return '<tr><td><b>'+esc(i.name)+'</b></td><td>'+categoryLabel(i.category)+'</td><td>'+esc(i.stock)+' '+esc(i.unit)+'</td><td>'+esc(i.min)+'</td><td><span class="status '+(low?'danger':'ok')+'">'+(low?'Low':'OK')+'</span></td><td>'+(canManage()?'<button class="btn btn-sm btn-outline" data-stock="'+i.id+'">Update</button> <button class="btn btn-sm btn-ghost" data-del-inv="'+i.id+'">Delete</button>':'')+'</td></tr>'}).join('');$('inventoryView').innerHTML='<section class="panel"><div class="panel-head"><h2>Inventory tracking</h2>'+(canManage()?'<button class="btn btn-primary" id="addInventory">+ Add item</button>':'')+'</div><table class="table"><thead><tr><th>Item</th><th>Category</th><th>Current</th><th>Minimum</th><th>Status</th><th></th></tr></thead><tbody>'+rows+'</tbody></table></section>'}
-function renderStaff(){var rows=state.data.staff.map(function(s){return '<tr><td><b>'+esc(s.name)+'</b></td><td>'+esc(s.role)+'</td><td><span class="status '+(s.active?'ok':'warn')+'">'+(s.active?'Active':'Off')+'</span></td><td>'+(canManage()?'<button class="btn btn-sm btn-outline" data-toggle-staff="'+s.id+'">Toggle</button> <button class="btn btn-sm btn-ghost" data-del-staff="'+s.id+'">Delete</button>':'Manager access only')+'</td></tr>'}).join('');$('staffView').innerHTML='<section class="panel"><div class="panel-head"><h2>Staff accounts</h2>'+(canManage()?'<button class="btn btn-primary" id="addStaff">+ Add staff</button>':'')+'</div><table class="table"><thead><tr><th>Name</th><th>Role</th><th>Status</th><th></th></tr></thead><tbody>'+rows+'</tbody></table></section>'}
+function renderStaff(){
+  var approved=(state.data.allowedStaff||[]).map(function(s){
+    return '<tr><td><b>'+esc(s.name)+'</b></td><td>'+esc(s.role)+'</td><td><span class="status '+(s.active?'ok':'warn')+'">'+(s.active?'Allowed':'Blocked')+'</span></td><td>'+(canManage()?'<button class="btn btn-sm btn-outline" data-toggle-allowed="'+s.id+'">Toggle</button> <button class="btn btn-sm btn-ghost" data-del-allowed="'+s.id+'">Remove</button>':'Manager access only')+'</td></tr>'
+  }).join('');
+
+  var logins=state.data.staff.map(function(s){
+    return '<tr><td><b>'+esc(s.name)+'</b></td><td>'+esc(s.role)+'</td><td><span class="status '+(s.active?'ok':'warn')+'">'+(s.active?'Active':'Off')+'</span></td><td>'+(canManage()?'<button class="btn btn-sm btn-outline" data-toggle-staff="'+s.id+'">Toggle</button> <button class="btn btn-sm btn-ghost" data-del-staff="'+s.id+'">Delete</button>':'Manager access only')+'</td></tr>'
+  }).join('');
+
+  $('staffView').innerHTML=
+    '<section class="panel"><div class="panel-head"><h2>Approved staff access</h2>'+(canManage()?'<button class="btn btn-primary" id="addAllowedStaff">+ Add approved staff</button>':'')+'</div><p>Only names listed here can enter as Staff or Kitchen. Manager uses the password.</p><table class="table"><thead><tr><th>Name</th><th>Role</th><th>Access</th><th></th></tr></thead><tbody>'+approved+'</tbody></table></section>'+
+    '<section class="panel"><div class="panel-head"><h2>Login history / staff accounts</h2>'+(canManage()?'<button class="btn btn-primary" id="addStaff">+ Add staff account</button>':'')+'</div><table class="table"><thead><tr><th>Name</th><th>Role</th><th>Status</th><th></th></tr></thead><tbody>'+logins+'</tbody></table></section>'
+}
 function renderAnalytics(){var byCat={};state.data.orders.forEach(function(o){if(o.status!=='cancelled')o.items.forEach(function(i){byCat[i.category]=(byCat[i.category]||0)+1})});var max=Math.max(1,...Object.values(byCat));var bars=CATEGORIES.map(function(c){var v=byCat[c[0]]||0;return '<div class="analytics-row"><b>'+c[1]+' '+c[2]+'</b><div class="analytics-track"><div class="analytics-fill" style="width:'+(v/max*100)+'%"></div></div><span>'+v+'</span></div>'}).join('');var c=counts(),rate=c.items?Math.round(c.done/c.items*100):0;$('analyticsView').innerHTML=statCards()+'<section class="panel"><h2>Analytics</h2><p>Completion rate: <b>'+rate+'%</b>. Total items received: <b>'+c.done+'/'+c.items+'</b>.</p><div class="analytics-bars">'+bars+'</div></section>'}
 function renderSettings(){$('settingsView').innerHTML='<section class="panel"><h2>Database connection</h2><p>This version uses <b>Supabase cloud database</b>. If data does not sync, check your Supabase URL, anon key, table name, and RLS policy.</p><div class="codebox">DB_MODE = "supabase";\nSUPABASE_CONFIG = {\n  url: "YOUR_SUPABASE_URL",\n  anonKey: "YOUR_SUPABASE_ANON_KEY"\n};\n\nTable used: peer_data\nRow used: id = main</div></section><section class="panel"><h2>Deployment</h2><p><b>GitHub Pages:</b> upload this file as <b>index.html</b>, then enable Pages from Settings → Pages.</p></section><section class="panel"><h2>Backup</h2><button class="btn btn-outline" id="exportData">Export JSON backup</button> <button class="btn btn-danger" id="resetData">Reset cloud data</button></section>'}
 function tick(){var el=$('clockPill');if(el)el.textContent=new Date().toLocaleString('en-GB',{weekday:'short',day:'2-digit',month:'short',hour:'2-digit',minute:'2-digit'})}
@@ -156,13 +174,37 @@ function tick(){var el=$('clockPill');if(el)el.textContent=new Date().toLocaleSt
 document.addEventListener('click',async function(e){
   var t=e.target;
   if(t.id==='loginBtn'){
-    var name=$('loginName').value.trim()||'Staff';
-    state.session={name:name,role:$('loginRole').value};
+    var name=$('loginName').value.trim();
+    var role=$('loginRole').value;
+
+    if(!name){
+      toast('Enter your staff name');
+      return;
+    }
+
+    if(role==='manager'){
+      if($('managerPassword').value !== 'hummerusa'){
+        toast('Wrong manager password');
+        return;
+      }
+    }else{
+      var allowed=(state.data.allowedStaff||[]).some(function(s){
+        return s.active && s.role===role && s.name.toLowerCase()===name.toLowerCase();
+      });
+      if(!allowed){
+        toast('Access denied: staff name is not approved');
+        return;
+      }
+    }
+
+    state.session={name:name,role:role};
     localStorage.setItem(KEY+'_session',JSON.stringify(state.session));
+
     if(!state.data.staff.some(function(s){return s.name.toLowerCase()===name.toLowerCase()})){
       state.data.staff.push({id:uid(),name:name,role:state.session.role,active:true});
       await save();
     }
+
     appRender();toast('Welcome '+name)
   }
   if(t.id==='logoutBtn'){localStorage.removeItem(KEY+'_session');state.session=null;appRender()}
@@ -178,6 +220,25 @@ document.addEventListener('click',async function(e){
   if(t.id==='addInventory'&&canManage()){var name=prompt('Item name');if(name){state.data.inventory.push({id:uid(),name:name,category:'other',stock:0,min:1,unit:'pcs'});await save();renderViews()}}
   if(t.dataset.stock&&canManage()){var it=state.data.inventory.find(function(i){return i.id===t.dataset.stock});var val=prompt('Current stock for '+it.name,it.stock);if(val!==null){it.stock=Number(val);await save();renderViews()}}
   if(t.dataset.delInv&&canManage()){state.data.inventory=state.data.inventory.filter(function(i){return i.id!==t.dataset.delInv});await save();renderViews()}
+  if(t.id==='addAllowedStaff'&&canManage()){
+    var n=prompt('Approved staff/kitchen name');
+    if(n){
+      var role=prompt('Role: type staff or kitchen','staff');
+      role=(role||'staff').toLowerCase().trim();
+      if(role!=='staff' && role!=='kitchen'){toast('Role must be staff or kitchen');return}
+      if(!state.data.allowedStaff) state.data.allowedStaff=[];
+      state.data.allowedStaff.push({id:uid(),name:n.trim(),role:role,active:true});
+      await save();renderViews()
+    }
+  }
+  if(t.dataset.toggleAllowed&&canManage()){
+    var a=(state.data.allowedStaff||[]).find(function(x){return x.id===t.dataset.toggleAllowed});
+    if(a){a.active=!a.active;await save();renderViews()}
+  }
+  if(t.dataset.delAllowed&&canManage()){
+    state.data.allowedStaff=(state.data.allowedStaff||[]).filter(function(s){return s.id!==t.dataset.delAllowed});
+    await save();renderViews()
+  }
   if(t.id==='addStaff'&&canManage()){var n=prompt('Staff name');if(n){state.data.staff.push({id:uid(),name:n,role:'staff',active:true});await save();renderViews()}}
   if(t.dataset.toggleStaff&&canManage()){var s=state.data.staff.find(function(x){return x.id===t.dataset.toggleStaff});s.active=!s.active;await save();renderViews()}
   if(t.dataset.delStaff&&canManage()){state.data.staff=state.data.staff.filter(function(s){return s.id!==t.dataset.delStaff});await save();renderViews()}
